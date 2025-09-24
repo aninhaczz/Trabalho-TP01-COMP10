@@ -1,47 +1,43 @@
-
-  #include <stdio.h>
+#include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 #include <ctype.h>
-
-//conjunto de palavras-chave
-const char *keywords[] ={
-
-    "program","var","begin","end","if","then","else","procedure","integer",NULL
-
-};
-
-//função para verificar se uma string è uma palavra-chave
-int iskeyword(const char *word){
-    for (int i = 0; keywords[i] != NULL; i++){
-        if (strcmp(word, keywords[i]) == 0)return 1;
-    }
-    return 0;
-}
+#include "token.h"
+#include "symtable.h"
 
 //função principal do lexer
-void lexer(const char *code){
+void lexer(const char *code, TS* ts){
     int i = 0;
+    int linha = 1, coluna = 1;
     while (code[i] != '\0'){
         char c = code[i];
 
      //ignorar espaços e quebras de linha
+    if(c == '\n'){ i++; linha++; coluna = 1; continue; }
     if(isspace(c)){
         i++;
+        coluna++;
         continue;
     }
+
     //identificadores ou palavras-chave
     if(isalpha(c)){
         char buffer[100];
         int j = 0;
+        int col_start = coluna;
         while (isalnum(code[i])){
             buffer[j++] = code[i++];
+            coluna++;
         }
         buffer[j] = '\0';
-        if(iskeyword(buffer)){
+        if(ts_exists(ts, buffer)){
             printf("KEYWORD(%s)\n",buffer);
         }else{
-            printf("IDENT(%s)\n",buffer);
+            if(!ts_insert_ident(ts, buffer, linha, col_start)){
+                printf("IDENT(%s)\n",buffer); /* já existia na TS (duplicado/keyword), mantém saída simples */
+            }else{
+                printf("IDENT(%s)\n",buffer);
+            }
         }
         continue;
     }
@@ -52,6 +48,7 @@ void lexer(const char *code){
         int j = 0;
         while(isdigit(code[i])){
             buffer[j++] = code[i++];
+            coluna++;
         }
         buffer[j]= '\0';
         printf("NUMBER(%s)\n",buffer);
@@ -60,47 +57,52 @@ void lexer(const char *code){
     }
     //comentários do tipo {...}
         if (c == '{') {
-            i++;
-            while (code[i] != '}' && code[i] != '\0') i++;
-            if (code[i] == '}') i++;
+            i++; coluna++;
+            while (code[i] != '}' && code[i] != '\0') {
+                if (code[i] == '\n'){ linha++; coluna = 1; i++; }
+                else { i++; coluna++; }
+            }
+            if (code[i] == '}') { i++; coluna++; }
             continue;
         }
 
         //comentários do tipo (*...*)
         if (c == '(' && code[i + 1] == '*') {
-            i += 2;
-            while (!(code[i] == '*' && code[i + 1] == ')') && code[i] != '\0') i++;
-            if (code[i] == '*' && code[i + 1] == ')') i += 2;
+            i += 2; coluna += 2;
+            while (!(code[i] == '*' && code[i + 1] == ')') && code[i] != '\0') {
+                if (code[i] == '\n'){ linha++; coluna = 1; i++; }
+                else { i++; coluna++; }
+            }
+            if (code[i] == '*' && code[i + 1] == ')') { i += 2; coluna += 2; }
             continue;
         }
-
 
     //operadores compostos
     if( c == ':' && code[i+1]== '='){
         printf("ASSIGN(:=)\n");
-        i +=2;
+        i +=2; coluna += 2;
         continue;
     }
     if (c == '<') {
             if (code[i + 1] == '=') {
                 printf("LEQ(<=)\n");
-                i += 2;
+                i += 2; coluna += 2;
             } else if (code[i + 1] == '>') {
                 printf("NEQ(<>)\n");
-                i += 2;
+                i += 2; coluna += 2;
             } else {
                 printf("LT(<)\n");
-                i++;
+                i++; coluna++;
             }
             continue;
         }
         if (c == '>') {
             if (code[i + 1] == '=') {
                 printf("GEQ(>=)\n");
-                i += 2;
+                i += 2; coluna += 2;
             } else {
                 printf("GT(>)\n");
-                i++;
+                i++; coluna++;
             }
             continue;
         }
@@ -124,12 +126,15 @@ void lexer(const char *code){
         default: printf("ERROR(%c)\n",c); break;
 
     }
-    i++;
+    i++; coluna++;
     }
 }
 
     //teste do autômato finito determinìsticos(AFD)
     int main(){
+        TS* ts = ts_create();
+        ts_preload_keywords(ts);
+
         const char *code =
         "program test; \n"
         "var x, y: integer; \n"
@@ -138,8 +143,8 @@ void lexer(const char *code){
         "y := x + 3; \n"
         "end.";
         
-        lexer(code);
+        lexer(code, ts);
+        ts_print(ts);
+        ts_free(ts);
         return 0;
     }
-
-
