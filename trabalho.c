@@ -5,146 +5,145 @@
 #include "token.h"
 #include "symtable.h"
 
-//função principal do lexer
-void lexer(const char *code, TS* ts){
-    int i = 0;
-    int linha = 1, coluna = 1;
-    while (code[i] != '\0'){
-        char c = code[i];
+/* Lexer that reads from FILE* and writes tokens to <input>.lex file. */
 
-     //ignorar espaços e quebras de linha
-    if(c == '\n'){ i++; linha++; coluna = 1; continue; }
-    if(isspace(c)){
-        i++;
-        coluna++;
-        continue;
-    }
-
-    //identificadores ou palavras-chave
-    if(isalpha(c)){
-        char buffer[100];
-        int j = 0;
-        int col_start = coluna;
-        while (isalnum(code[i])){
-            buffer[j++] = code[i++];
-            coluna++;
-        }
-        buffer[j] = '\0';
-        if(ts_exists(ts, buffer)){
-            printf("KEYWORD(%s)\n",buffer);
-        }else{
-            if(!ts_insert_ident(ts, buffer, linha, col_start)){
-                printf("IDENT(%s)\n",buffer); /* já existia na TS (duplicado/keyword), mantém saída simples */
-            }else{
-                printf("IDENT(%s)\n",buffer);
-            }
-        }
-        continue;
-    }
-
-    //nùmeros inteiros
-    if(isdigit(c)){
-        char buffer[100];
-        int j = 0;
-        while(isdigit(code[i])){
-            buffer[j++] = code[i++];
-            coluna++;
-        }
-        buffer[j]= '\0';
-        printf("NUMBER(%s)\n",buffer);
-        continue;
-
-    }
-    //comentários do tipo {...}
-        if (c == '{') {
-            i++; coluna++;
-            while (code[i] != '}' && code[i] != '\0') {
-                if (code[i] == '\n'){ linha++; coluna = 1; i++; }
-                else { i++; coluna++; }
-            }
-            if (code[i] == '}') { i++; coluna++; }
-            continue;
-        }
-
-        //comentários do tipo (*...*)
-        if (c == '(' && code[i + 1] == '*') {
-            i += 2; coluna += 2;
-            while (!(code[i] == '*' && code[i + 1] == ')') && code[i] != '\0') {
-                if (code[i] == '\n'){ linha++; coluna = 1; i++; }
-                else { i++; coluna++; }
-            }
-            if (code[i] == '*' && code[i + 1] == ')') { i += 2; coluna += 2; }
-            continue;
-        }
-
-    //operadores compostos
-    if( c == ':' && code[i+1]== '='){
-        printf("ASSIGN(:=)\n");
-        i +=2; coluna += 2;
-        continue;
-    }
-    if (c == '<') {
-            if (code[i + 1] == '=') {
-                printf("LEQ(<=)\n");
-                i += 2; coluna += 2;
-            } else if (code[i + 1] == '>') {
-                printf("NEQ(<>)\n");
-                i += 2; coluna += 2;
-            } else {
-                printf("LT(<)\n");
-                i++; coluna++;
-            }
-            continue;
-        }
-        if (c == '>') {
-            if (code[i + 1] == '=') {
-                printf("GEQ(>=)\n");
-                i += 2; coluna += 2;
-            } else {
-                printf("GT(>)\n");
-                i++; coluna++;
-            }
-            continue;
-        }
-   
-    //sìmbolo de 1 caractere
-    switch(c){
-        
-        case '+' : printf("PLUS(+)\n"); break;
-        case '-' : printf("MINUS(-)\n"); break;
-        case '*' : printf("MULT(*)\n"); break;
-        case '/' : printf("DIV(/)\n"); break;
-        case '=' : printf("EQ(=)\n"); break;
-        case '<' : printf("LT(<)\n"); break;
-        case '>' : printf("GT(>)\n"); break;
-        case ';' : printf("SEMICOLON(;)\n"); break;
-        case ',' : printf("COMMA(,)\n"); break;
-        case '(' : printf("LPAREN( ()\n"); break;
-        case ')' : printf("RPAREN() ) \n"); break;
-        case '.' : printf("DOT(.)\n"); break;
-        case ':' : printf("COLON(:)\n"); break;
-        default: printf("ERROR(%c)\n",c); break;
-
-    }
-    i++; coluna++;
-    }
+static int is_keyword(const char* s){
+  const char* kw[] = {"program","var","integer","real","begin","end","if","then","else","while","do", NULL};
+  for(int i=0; kw[i]; ++i){
+    if (strcasecmp(kw[i], s)==0) return 1;
+  }
+  return 0;
 }
 
-    //teste do autômato finito determinìsticos(AFD)
-    int main(){
-        TS* ts = ts_create();
-        ts_preload_keywords(ts);
+static void write_token_file(FILE* f, const char* name, const char* lex, int linha, int col){
+  fprintf(f, "<%s,%s,%d,%d>\n", name, lex, linha, col);
+}
 
-        const char *code =
-        "program test; \n"
-        "var x, y: integer; \n"
-        "begin \n"
-        "x := 10; \n"
-        "y := x + 3; \n"
-        "end.";
-        
-        lexer(code, ts);
-        ts_print(ts);
-        ts_free(ts);
-        return 0;
+static void maybe_add_ident(TS* ts, const char* lex, int linha, int coluna){
+  if (!ts_exists(ts, lex)) ts_insert_ident(ts, lex, linha, coluna);
+}
+
+void lexer(FILE* in, const char* inputname, TS* ts){
+  int linha=1, col=0;
+  char outname[256];
+  snprintf(outname, sizeof(outname), "%s.lex", inputname);
+  FILE* out = fopen(outname, "w");
+  if (!out){ perror("fopen"); return; }
+
+  int c;
+  while((c=fgetc(in))!=EOF){
+    if (c==' '||c=='\t'||c=='\r'){ col++; continue; }
+    if (c=='\n'){ linha++; col=0; continue; }
+    // identifiers / keywords
+    if (isalpha(c)){
+      int startcol = col+1;
+      char buf[128]; int i=0;
+      buf[i++]=c; col++;
+      while((c=fgetc(in))!=EOF && isalnum(c)){
+        if (i< (int)sizeof(buf)-1) buf[i++]=c; col++;
+      }
+      if (c!=EOF) ungetc(c,in);
+      buf[i]=0;
+      if (is_keyword(buf)){
+        write_token_file(out,"KEYWORD",buf,linha,startcol);
+        if (!ts_exists(ts,buf)) ts_insert_keyword(ts,buf);
+      } else {
+        write_token_file(out,"IDENT",buf,linha,startcol);
+        maybe_add_ident(ts,buf,linha,startcol);
+      }
+      continue;
     }
+    // numbers
+    if (isdigit(c)){
+      int startcol=col+1;
+      char buf[128]; int i=0; int is_real=0;
+      buf[i++]=c; col++;
+      while((c=fgetc(in))!=EOF){
+        if (isdigit(c)){ if(i<127)buf[i++]=c; col++; continue;}
+        if (c=='.'){ is_real=1; if(i<127)buf[i++]=c; col++;
+          while((c=fgetc(in))!=EOF && isdigit(c)){ if(i<127)buf[i++]=c; col++; }
+          if(c!=EOF) ungetc(c,in);
+          break;
+        }
+        if (c=='E'||c=='e'){ is_real=1; if(i<127)buf[i++]=c; col++;
+          c=fgetc(in); if(c=='+'||c=='-'){ if(i<127)buf[i++]=c; col++; } else if(c!=EOF) ungetc(c,in);
+          while((c=fgetc(in))!=EOF && isdigit(c)){ if(i<127)buf[i++]=c; col++; }
+          if(c!=EOF) ungetc(c,in);
+          break;
+        }
+        if(c!=EOF) ungetc(c,in);
+        break;
+      }
+      buf[i]=0;
+      write_token_file(out, is_real?"NUM_REAL":"NUM_INT", buf, linha,startcol);
+      continue;
+    }
+    // strings
+    if (c=='\''||c=='"'){
+      int startcol=col+1;
+      char quote=c; char buf[1024]; int i=0; int closed=0;
+      buf[i++]=c; col++;
+      while((c=fgetc(in))!=EOF){
+        buf[i++]=c; col++;
+        if (c==quote){ closed=1; break; }
+        if (c=='\n'){ linha++; col=0; break; }
+        if(i>=1023) break;
+      }
+      buf[i]=0;
+      if(!closed){ fprintf(stderr,"Lexical error: string not closed at %d:%d\n",linha,startcol);
+                   fprintf(out,"## ERROR: string not closed at %d:%d\n",linha,startcol); }
+      write_token_file(out,"STRING",buf,linha,startcol);
+      continue;
+    }
+    // comments
+    if(c=='{'){
+      int startcol=col+1; col++; int closed=0;
+      while((c=fgetc(in))!=EOF){ if(c=='\n'){linha++;col=0;continue;} col++; if(c=='}'){closed=1;break;} }
+      if(!closed){ fprintf(stderr,"Lexical error: comment not closed at %d:%d\n",linha,startcol);
+                   fprintf(out,"## ERROR: comment not closed at %d:%d\n",linha,startcol); }
+      continue;
+    }
+    if(c=='('){
+      int nc=fgetc(in);
+      if(nc=='*'){ int startcol=col+1; col+=2; int closed=0;
+        while((c=fgetc(in))!=EOF){ if(c=='*'){ int nc2=fgetc(in); if(nc2==')'){closed=1;col+=2;break;} else ungetc(nc2,in); } if(c=='\n'){linha++;col=0;} else col++; }
+        if(!closed){ fprintf(stderr,"Lexical error: comment not closed at %d:%d\n",linha,startcol);
+                     fprintf(out,"## ERROR: comment not closed at %d:%d\n",linha,startcol); }
+        continue;
+      } else { if(nc!=EOF) ungetc(nc,in); }
+    }
+    // operators and symbols
+    int startcol=col+1; col++;
+    if(c==':'){ int nc=fgetc(in); if(nc=='='){ write_token_file(out,"OP_ASSIGN",":=",linha,startcol); col++; } else { if(nc!=EOF) ungetc(nc,in); write_token_file(out,"SMB_COLON",":",linha,startcol);} continue; }
+    if(c=='<'){ int nc=fgetc(in); if(nc=='>'){ write_token_file(out,"OP_NE","<>",linha,startcol); col++; } else if(nc=='='){ write_token_file(out,"OP_LE","<=",linha,startcol); col++; } else { if(nc!=EOF) ungetc(nc,in); write_token_file(out,"OP_LT","<",linha,startcol);} continue; }
+    if(c=='>'){ int nc=fgetc(in); if(nc=='='){ write_token_file(out,"OP_GE",">=",linha,startcol); col++; } else { if(nc!=EOF) ungetc(nc,in); write_token_file(out,"OP_GT",">",linha,startcol);} continue; }
+    if(c=='='){ write_token_file(out,"OP_EQ","=",linha,startcol); continue; }
+    if(c=='+'){ write_token_file(out,"OP_AD","+",linha,startcol); continue; }
+    if(c=='-'){ write_token_file(out,"OP_MIN","-",linha,startcol); continue; }
+    if(c=='*'){ write_token_file(out,"OP_MUL","*",linha,startcol); continue; }
+    if(c=='/'){ write_token_file(out,"OP_DIV","/",linha,startcol); continue; }
+    if(c==';'){ write_token_file(out,"SMB_SEM",";",linha,startcol); continue; }
+    if(c==','){ write_token_file(out,"SMB_COM",",",linha,startcol); continue; }
+    if(c=='('){ write_token_file(out,"SMB_OPA","(",linha,startcol); continue; }
+    if(c==')'){ write_token_file(out,"SMB_CPA",")",linha,startcol); continue; }
+    if(c=='.'){ write_token_file(out,"SMB_DOT",".",linha,startcol); continue; }
+    // unknown
+    { char tmp[4]={c,0,0,0}; fprintf(stderr,"Lexical error: invalid character '%c' at %d:%d\n",c,linha,startcol);
+      fprintf(out,"## ERROR: invalid character '%c' at %d:%d\n",c,linha,startcol);
+      write_token_file(out,"UNKNOWN",tmp,linha,startcol); }
+  }
+  fclose(out);
+}
+
+int main(int argc, char** argv){
+  if(argc<2){ fprintf(stderr,"Uso: %s arquivo.mp\n",argv[0]); return 1; }
+  FILE* in=fopen(argv[1],"r");
+  if(!in){ perror("fopen"); return 1; }
+  TS* ts=ts_create();
+  ts_preload_keywords(ts);
+  lexer(in, argv[1], ts);
+  fclose(in);
+  ts_print(ts);
+  ts_free(ts);
+  return 0;
+}

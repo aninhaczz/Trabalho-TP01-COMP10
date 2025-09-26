@@ -4,102 +4,88 @@
 #include <ctype.h>
 #include "symtable.h"
 
-/* ===== Hash com encadeamento e comparação case-insensitive ===== */
-
-#define NBUC 211  /* número de buckets (primo ajuda) */
+#define NBUC 211
 
 typedef struct Node {
-  Token        tok;
+  Token tok;
   struct Node* next;
 } Node;
 
 struct TS { Node* b[NBUC]; };
 
-/* --- util: hash/tolower/igualdade case-insensitive --- */
-static unsigned h_ci(const char* s){
-  unsigned long h=5381;
-  for(; *s; ++s){
-    int c=tolower((unsigned char)*s);
-    h=((h<<5)+h)+c; /* h*33 + c */
-  }
-  return (unsigned)(h%NBUC);
+static unsigned hash(const char* s){
+  unsigned h = 5381;
+  for(const unsigned char* p=(const unsigned char*)s; *p; ++p) h = ((h<<5)+h) + *p;
+  return h % NBUC;
 }
-
-static void tolower_copy(char* dst, size_t n, const char* src){
-  size_t i=0;
-  for(; src[i] && i+1<n; ++i) dst[i]=(char)tolower((unsigned char)src[i]);
-  dst[i]='\0';
-}
-
-static int eq_ci(const char* a, const char* b){
-  for(; *a && *b; ++a, ++b){
-    int ca=tolower((unsigned char)*a), cb=tolower((unsigned char)*b);
-    if(ca!=cb) return 0;
-  }
-  return *a==*b;
-}
-
-static Token make_token(TokenType t, const char* lex, int ln, int col){
-  Token x;
-  x.type=t;
-  tolower_copy(x.lexema, sizeof(x.lexema), lex); /* normaliza para lowercase */
-  x.linha=ln; x.coluna=col;
-  return x;
-}
-
-/* ===== API ===== */
 
 TS* ts_create(void){
-  TS* ts=(TS*)calloc(1, sizeof(TS));
+  TS* ts = (TS*)malloc(sizeof(TS));
+  if (!ts) return NULL;
+  for(int i=0;i<NBUC;i++) ts->b[i]=NULL;
   return ts;
 }
 
 void ts_free(TS* ts){
   if(!ts) return;
   for(int i=0;i<NBUC;i++){
-    Node* n=ts->b[i];
-    while(n){ Node* nx=n->next; free(n); n=nx; }
+    Node* n = ts->b[i];
+    while(n){
+      Node* nx = n->next;
+      free(n);
+      n = nx;
+    }
   }
   free(ts);
 }
 
-static int ts_insert_raw(TS* ts, Token t){
-  unsigned h=h_ci(t.lexema);
-  for(Node* n=ts->b[h]; n; n=n->next){
-    if(eq_ci(n->tok.lexema, t.lexema)) return 0; /* já existe */
-  }
-  Node* nn=(Node*)malloc(sizeof(Node));
-  nn->tok=t; nn->next=ts->b[h]; ts->b[h]=nn;
-  return 1;
-}
-
+/* consulta se lexema existe na tabela (case-insensitive) */
 int ts_exists(TS* ts, const char* lexema){
-  unsigned h=h_ci(lexema);
-  for(Node* n=ts->b[h]; n; n=n->next){
-    if(eq_ci(n->tok.lexema, lexema)) return 1;
+  if(!ts || !lexema) return 0;
+  unsigned h = hash(lexema);
+  for(Node* n = ts->b[h]; n; n=n->next){
+    if (strcasecmp(n->tok.lexema, lexema) == 0) return 1;
   }
   return 0;
 }
 
+/* insere palavra-chave (uso interno) */
 int ts_insert_keyword(TS* ts, const char* kw){
-  Token t = make_token(TK_KEYWORD, kw, 0, 0);
-  return ts_insert_raw(ts, t);
+  if(!ts || !kw) return 0;
+  if (ts_exists(ts, kw)) return 0;
+  unsigned h = hash(kw);
+  Node* n = (Node*)malloc(sizeof(Node));
+  memset(n,0,sizeof(Node));
+  n->next = ts->b[h];
+  n->tok.type = TK_KEYWORD;
+  strncpy(n->tok.lexema, kw, sizeof(n->tok.lexema)-1);
+  n->tok.linha = 0; n->tok.coluna = 0;
+  ts->b[h] = n;
+  return 1;
 }
 
-/* regra: NÃO inserir se já existir (duplicado) ou se for keyword */
+/* insere identificador (apenas se não existir) */
 int ts_insert_ident(TS* ts, const char* id, int linha, int coluna){
-  if(ts_exists(ts, id)) return 0;                   /* já existe (ident/keyword) */
-  Token t = make_token(TK_IDENT, id, linha, coluna);
-  return ts_insert_raw(ts, t);
+  if(!ts || !id) return 0;
+  if (ts_exists(ts, id)) return 0;
+  unsigned h = hash(id);
+  Node* n = (Node*)malloc(sizeof(Node));
+  memset(n,0,sizeof(Node));
+  n->next = ts->b[h];
+  n->tok.type = TK_IDENT;
+  strncpy(n->tok.lexema, id, sizeof(n->tok.lexema)-1);
+  n->tok.linha = linha; n->tok.coluna = coluna;
+  ts->b[h] = n;
+  return 1;
 }
 
+/* pré-carrega as palavras reservadas */
 void ts_preload_keywords(TS* ts){
-  const char* kw[]={
-    "program","var","integer","real","begin","end","if","then","else","while","do"
-  };
-  for(size_t i=0;i<sizeof(kw)/sizeof(kw[0]);++i) ts_insert_keyword(ts, kw[i]);
+  const char* kw[] = {"program","var","integer","real","begin","end","if","then","else","while","do", NULL};
+  for(int i=0; kw[i]; ++i) ts_insert_keyword(ts, kw[i]);
 }
 
+/* imprime conteúdo da tabela */
 void ts_print(TS* ts){
   puts("=== Tabela de Símbolos ===");
   for(int i=0;i<NBUC;i++){
@@ -108,6 +94,7 @@ void ts_print(TS* ts){
         n->tok.type==TK_KEYWORD ? "KEYWORD" :
         n->tok.type==TK_IDENT   ? "IDENT"   :
         n->tok.type==TK_NUMBER_INT ? "NUM_INT" :
+        n->tok.type==TK_NUMBER_REAL ? "NUM_REAL" :
         "OUTRO";
       printf("<%s, %s, %d, %d>\n", k, n->tok.lexema, n->tok.linha, n->tok.coluna);
     }
