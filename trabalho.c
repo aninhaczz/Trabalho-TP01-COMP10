@@ -5,7 +5,7 @@
 #include "token.h"
 #include "symtable.h"
 
-/* Lexer that reads from FILE* and writes tokens to <input>.lex file. */
+/* Lexer que lê de FILE* e escreve tokens em <input>.lex */
 
 static int is_keyword(const char* s){
   const char* kw[] = {"program","var","integer","real","begin","end","if","then","else","while","do", NULL};
@@ -34,26 +34,31 @@ void lexer(FILE* in, const char* inputname, TS* ts){
   while((c=fgetc(in))!=EOF){
     if (c==' '||c=='\t'||c=='\r'){ col++; continue; }
     if (c=='\n'){ linha++; col=0; continue; }
-    // identifiers / keywords
+
+    // identificadores / palavras reservadas
     if (isalpha(c)){
       int startcol = col+1;
       char buf[128]; int i=0;
       buf[i++]=c; col++;
-      while((c=fgetc(in))!=EOF && isalnum(c)){
-        if (i< (int)sizeof(buf)-1) buf[i++]=c; col++;
-      }
+    while((c=fgetc(in))!=EOF && isalnum(c)){
+      if (i< (int)sizeof(buf)-1) { buf[i++]=c; }
+      col++;
+    }
       if (c!=EOF) ungetc(c,in);
       buf[i]=0;
       if (is_keyword(buf)){
-        write_token_file(out,"KEYWORD",buf,linha,startcol);
+        // palavra reservada
+        write_token_file(out, buf, buf, linha, startcol); // exemplo: <PROGRAM,program,...>
         if (!ts_exists(ts,buf)) ts_insert_keyword(ts,buf);
       } else {
-        write_token_file(out,"IDENT",buf,linha,startcol);
+        // identificador
+        write_token_file(out,"ID",buf,linha,startcol);
         maybe_add_ident(ts,buf,linha,startcol);
       }
       continue;
     }
-    // numbers
+
+    // números (inteiros ou reais)
     if (isdigit(c)){
       int startcol=col+1;
       char buf[128]; int i=0; int is_real=0;
@@ -78,45 +83,49 @@ void lexer(FILE* in, const char* inputname, TS* ts){
       write_token_file(out, is_real?"NUM_REAL":"NUM_INT", buf, linha,startcol);
       continue;
     }
-    // strings
+
+    // strings -> erro léxico (não suportadas)
     if (c=='\''||c=='"'){
       int startcol=col+1;
-      char quote=c; char buf[1024]; int i=0; int closed=0;
-      buf[i++]=c; col++;
-      while((c=fgetc(in))!=EOF){
-        buf[i++]=c; col++;
-        if (c==quote){ closed=1; break; }
-        if (c=='\n'){ linha++; col=0; break; }
-        if(i>=1023) break;
-      }
-      buf[i]=0;
-      if(!closed){ fprintf(stderr,"Lexical error: string not closed at %d:%d\n",linha,startcol);
-                   fprintf(out,"## ERROR: string not closed at %d:%d\n",linha,startcol); }
-      write_token_file(out,"STRING",buf,linha,startcol);
+      fprintf(stderr,"Erro lexico: string nao suportada em %d:%d\n",linha,startcol);
+      fprintf(out,"## ERROR: string literal not supported at %d:%d\n",linha,startcol);
       continue;
     }
-    // comments
+
+    // comentários -> erro léxico (não suportados)
     if(c=='{'){
-      int startcol=col+1; col++; int closed=0;
-      while((c=fgetc(in))!=EOF){ if(c=='\n'){linha++;col=0;continue;} col++; if(c=='}'){closed=1;break;} }
-      if(!closed){ fprintf(stderr,"Lexical error: comment not closed at %d:%d\n",linha,startcol);
-                   fprintf(out,"## ERROR: comment not closed at %d:%d\n",linha,startcol); }
+      int startcol=col+1;
+      fprintf(stderr,"Erro lexico: comentario nao suportado em %d:%d\n",linha,startcol);
+      fprintf(out,"## ERROR: comment not supported at %d:%d\n",linha,startcol);
       continue;
     }
     if(c=='('){
       int nc=fgetc(in);
-      if(nc=='*'){ int startcol=col+1; col+=2; int closed=0;
-        while((c=fgetc(in))!=EOF){ if(c=='*'){ int nc2=fgetc(in); if(nc2==')'){closed=1;col+=2;break;} else ungetc(nc2,in); } if(c=='\n'){linha++;col=0;} else col++; }
-        if(!closed){ fprintf(stderr,"Lexical error: comment not closed at %d:%d\n",linha,startcol);
-                     fprintf(out,"## ERROR: comment not closed at %d:%d\n",linha,startcol); }
+      if(nc=='*'){
+        int startcol=col+1;
+        fprintf(stderr,"Erro lexico: comentario nao suportado em %d:%d\n",linha,startcol);
+        fprintf(out,"## ERROR: comment not supported at %d:%d\n",linha,startcol);
         continue;
-      } else { if(nc!=EOF) ungetc(nc,in); }
+      } else {
+        if(nc!=EOF) ungetc(nc,in);
+      }
     }
-    // operators and symbols
+
+    // operadores e símbolos
     int startcol=col+1; col++;
-    if(c==':'){ int nc=fgetc(in); if(nc=='='){ write_token_file(out,"OP_ASSIGN",":=",linha,startcol); col++; } else { if(nc!=EOF) ungetc(nc,in); write_token_file(out,"SMB_COLON",":",linha,startcol);} continue; }
-    if(c=='<'){ int nc=fgetc(in); if(nc=='>'){ write_token_file(out,"OP_NE","<>",linha,startcol); col++; } else if(nc=='='){ write_token_file(out,"OP_LE","<=",linha,startcol); col++; } else { if(nc!=EOF) ungetc(nc,in); write_token_file(out,"OP_LT","<",linha,startcol);} continue; }
-    if(c=='>'){ int nc=fgetc(in); if(nc=='='){ write_token_file(out,"OP_GE",">=",linha,startcol); col++; } else { if(nc!=EOF) ungetc(nc,in); write_token_file(out,"OP_GT",">",linha,startcol);} continue; }
+    if(c==':'){ int nc=fgetc(in); 
+      if(nc=='='){ write_token_file(out,"OP_ASS",":=",linha,startcol); col++; } 
+      else { if(nc!=EOF) ungetc(nc,in); write_token_file(out,"DOIS_PONTOS",":",linha,startcol);} 
+      continue; }
+    if(c=='<'){ int nc=fgetc(in); 
+      if(nc=='>'){ write_token_file(out,"OP_NE","<>",linha,startcol); col++; } 
+      else if(nc=='='){ write_token_file(out,"OP_LE","<=",linha,startcol); col++; } 
+      else { if(nc!=EOF) ungetc(nc,in); write_token_file(out,"OP_LT","<",linha,startcol);} 
+      continue; }
+    if(c=='>'){ int nc=fgetc(in); 
+      if(nc=='='){ write_token_file(out,"OP_GE",">=",linha,startcol); col++; } 
+      else { if(nc!=EOF) ungetc(nc,in); write_token_file(out,"OP_GT",">",linha,startcol);} 
+      continue; }
     if(c=='='){ write_token_file(out,"OP_EQ","=",linha,startcol); continue; }
     if(c=='+'){ write_token_file(out,"OP_AD","+",linha,startcol); continue; }
     if(c=='-'){ write_token_file(out,"OP_MIN","-",linha,startcol); continue; }
@@ -127,8 +136,10 @@ void lexer(FILE* in, const char* inputname, TS* ts){
     if(c=='('){ write_token_file(out,"SMB_OPA","(",linha,startcol); continue; }
     if(c==')'){ write_token_file(out,"SMB_CPA",")",linha,startcol); continue; }
     if(c=='.'){ write_token_file(out,"SMB_DOT",".",linha,startcol); continue; }
-    // unknown
-    { char tmp[4]={c,0,0,0}; fprintf(stderr,"Lexical error: invalid character '%c' at %d:%d\n",c,linha,startcol);
+
+    // caractere inválido
+    { char tmp[4]={c,0,0,0}; 
+      fprintf(stderr,"Erro lexico: caractere invalido '%c' em %d:%d\n",c,linha,startcol);
       fprintf(out,"## ERROR: invalid character '%c' at %d:%d\n",c,linha,startcol);
       write_token_file(out,"UNKNOWN",tmp,linha,startcol); }
   }
