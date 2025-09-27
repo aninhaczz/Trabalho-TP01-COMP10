@@ -1,0 +1,14 @@
+# Arquivos binários
+lexer
+lexer.exe
+*.o
+
+# Saídas geradas
+*.lex
+
+# Configurações de IDE
+.vscode/
+.DS_Store
+
+# Arquivos temporários
+*.log
